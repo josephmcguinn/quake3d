@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>3D Earthquake Depth Visualization</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+  <div id="plot" style="width:100%;height:100vh;"></div>
+  <script>
+    async function plot() {
+      const res = await fetch(
+        "https://scdnr.maps.arcgis.com/apps/mapviewer/index.html?webmap=25561b5bab7542a88c4d053023d1f2ef"
+      );
+      const data = await res.json();
+      const feats = data.features.map(f => f.properties);
+
+      const trace = {
+        x: feats.map(f => f.longitude),
+        y: feats.map(f => f.latitude),
+        z: feats.map(f => f.depth),
+        mode: "markers",
+        marker: {
+          size: feats.map(f => f.mag * 2),
+          color: feats.map(f => f.mag),
+          colorscale: "YlOrRd",
+          opacity: 0.8
+        },
+        type: "scatter3d"
+      };
+
+      Plotly.newPlot("plot", [trace], {
+        title: "3D Earthquake Depth Distribution",
+        scene: { zaxis: { autorange: "reversed" } }
+      });
+    }
+    plot();
+  </script>
+</body>
+</html>
