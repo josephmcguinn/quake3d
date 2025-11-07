@@ -1,40 +1,58 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>3D Earthquake Depth Visualization</title>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>html,body{margin:0;height:100%}</style>
 </head>
 <body>
-  <div id="plot" style="width:100%;height:100vh;"></div>
+  <div id="plot" style="width:100%;height:100vh;display:flex;align-items:center;justify-content:center;">Loading…</div>
   <script>
     async function plot() {
-      const res = await fetch(
-        "https://scdnr.maps.arcgis.com/apps/mapviewer/index.html?webmap=25561b5bab7542a88c4d053023d1f2ef"
-      );
-      const data = await res.json();
-      const feats = data.features.map(f => f.properties);
+      try {
+        // 1) Query your hosted feature layer directly (PUBLIC)
+        const url = "https://services.arcgis.com/oEazpvC7G00gPDRM/arcgis/rest/services/SC_Earthquakes/FeatureServer/0/query" +
+          "?where=1%3D1" +
+          "&outFields=longitude,latitude,depth,mag" +
+          "&returnGeometry=false" +
+          "&f=geojson";
 
-      const trace = {
-        x: feats.map(f => f.longitude),
-        y: feats.map(f => f.latitude),
-        z: feats.map(f => f.depth),
-        mode: "markers",
-        marker: {
-          size: feats.map(f => f.mag * 2),
-          color: feats.map(f => f.mag),
-          colorscale: "YlOrRd",
-          opacity: 0.8
-        },
-        type: "scatter3d"
-      };
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const feats = (data.features || []).map(f => f.properties);
 
-      Plotly.newPlot("plot", [trace], {
-        title: "3D Earthquake Depth Distribution",
-        scene: { zaxis: { autorange: "reversed" } }
-      });
+        if (!feats.length) {
+          document.getElementById("plot").innerHTML = "No features returned. Check layer sharing and field names.";
+          return;
+        }
+
+        const trace = {
+          x: feats.map(f => f.longitude),
+          y: feats.map(f => f.latitude),
+          z: feats.map(f => f.depth),
+          mode: "markers",
+          marker: {
+            size: feats.map(f => (Number(f.mag) || 0) * 2),
+            color: feats.map(f => Number(f.mag) || 0),
+            opacity: 0.8
+          },
+          type: "scatter3d"
+        };
+
+        Plotly.newPlot("plot", [trace], {
+          title: "3D Earthquake Depth Distribution",
+          scene: { zaxis: { autorange: "reversed" } }
+        });
+      } catch (e) {
+        console.error(e);
+        document.getElementById("plot").innerHTML = "Error loading data (see console).";
+      }
     }
     plot();
   </script>
 </body>
 </html>
+
+
