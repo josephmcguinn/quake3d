@@ -16,22 +16,43 @@
   <script>
     "use strict";
 
-    // ---- CONFIG: your Feature Service (Layer 0), fields, etc. ----
+    // -------------------------------------------------------------------------
+    // ✅ NEW — Helper to read Experience Builder selection passed as ?eb_data_s=
+    // -------------------------------------------------------------------------
+    function getEbQueryParam() {
+      const qs = new URLSearchParams(window.location.search);
+      const v = qs.get("eb_data_s");
+      return v ? decodeURIComponent(v) : null;
+    }
+
+    // ---- CONFIG ----
     const SERVICE_BASE =
       "https://services.arcgis.com/acgZYxoN5Oj8pDLa/arcgis/rest/services/SC_Earthquakes_test_jmcguinn/FeatureServer/0/query";
     const DEPTH_FIELD = "depth_km";
     const MAG_FIELD   = "mag";
 
-    // ---- Parse Experience Builder selection from URL hash ----
+    // -------------------------------------------------------------------------
+    // ✅ Modified parseExperienceHash()
+    //    Now it first checks location.hash, and if empty,
+    //    it reads ?eb_data_s= from the query string.
+    // -------------------------------------------------------------------------
     function parseExperienceHash() {
-      const raw = window.location.hash || "";
+      // 1) Normal reading from URL hash (iframe will often NOT have one)
+      let raw = window.location.hash || "";
+
+      // 2) If iframe has no hash, use eb_data_s query parameter from EB
+      const qp = getEbQueryParam();
+      if (!raw && qp) {
+        raw = "#data_s=" + qp;
+      }
+
       const out = { geometry: null, spatialRel: null };
       if (!raw.includes("data_s=")) return out;
 
-      const decoded = decodeURIComponent(raw.slice(1)); // strip '#'
+      const decoded = decodeURIComponent(raw.slice(1)); 
       const after = decoded.split("data_s=")[1] || "";
 
-      // Find JSON that follows "geometry:"
+      // ---- Parse geometry JSON ----
       const geomIdx = after.lastIndexOf("geometry:");
       if (geomIdx !== -1) {
         const jsonStart = after.indexOf("{", geomIdx);
@@ -51,14 +72,14 @@
         }
       }
 
-      // Example token: "spatialRel:...:esriSpatialRelIntersects"
+      // ---- Parse spatialRel ----
       const relMatch = after.match(/spatialRel:[^:]+:[^,]+/g);
       if (relMatch?.length) out.spatialRel = relMatch.at(-1).split(":").pop();
 
       return out;
     }
 
-    // ---- Build ArcGIS REST /query URL ----
+    // ---- Build REST URL ----
     function buildQueryURL(geomInfo) {
       const params = new URLSearchParams({
         where: "1=1",
@@ -71,7 +92,6 @@
         params.set("geometry", JSON.stringify(geomInfo.geometry));
         const isPolygon = !!geomInfo.geometry.rings;
         params.set("geometryType", isPolygon ? "esriGeometryPolygon" : "esriGeometryEnvelope");
-        // Experience Builder selections are in Web Mercator
         params.set("inSR", String(geomInfo.geometry.spatialReference?.wkid || 102100));
         if (geomInfo.spatialRel) params.set("spatialRel", geomInfo.spatialRel);
       }
@@ -79,7 +99,7 @@
       return `${SERVICE_BASE}?${params.toString()}`;
     }
 
-    // ---- Fetch, transform, and plot ----
+    // ---- Fetch + Plot ----
     async function plot() {
       const mount = document.getElementById("plot");
       mount.textContent = "Loading…";
@@ -94,7 +114,7 @@
 
         const feats = data.features || [];
         if (!feats.length) {
-          mount.innerHTML = "No features returned. If you used a selection, make sure it intersects earthquakes and the layer is shared publicly.";
+          mount.innerHTML = "No features returned. Selection may not intersect earthquakes.";
           return;
         }
 
@@ -102,53 +122,55 @@
         for (const f of feats) {
           const coords = f.geometry?.coordinates;
           if (!Array.isArray(coords)) continue;
+
           const x = Number(coords[0]);
           const y = Number(coords[1]);
           const depth = Number(f.properties?.[DEPTH_FIELD] ?? 0);
           const mag   = Number(f.properties?.[MAG_FIELD]   ?? 0);
+
           if (!Number.isNaN(x) && !Number.isNaN(y)) {
             xs.push(x); ys.push(y); zs.push(depth); mags.push(mag);
           }
         }
 
         if (!xs.length) {
-          mount.innerHTML = "Features returned, but no usable point coordinates found.";
+          mount.innerHTML = "No usable coordinates returned.";
           return;
         }
 
-        const trace = {
-          x: xs, y: ys, z: zs,
-          mode: "markers",
-          type: "scatter3d",
-          marker: {
-            size: mags.map(m => (m || 0) * 2),
-            color: mags,
-            opacity: 0.85,
-            colorbar: { title: "Magnitude" }
+        Plotly.newPlot("plot",
+          [{
+            x: xs, y: ys, z: zs,
+            mode: "markers",
+            type: "scatter3d",
+            marker: {
+              size: mags.map(m => (m || 0) * 2),
+              color: mags,
+              opacity: 0.85,
+              colorbar: { title: "Magnitude" }
+            }
+          }],
+          {
+            title: "3D Earthquake Depth Distribution",
+            scene: {
+              zaxis: { autorange: "reversed", title: "Depth (km)" },
+              xaxis: { title: "Longitude" },
+              yaxis: { title: "Latitude" }
+            },
+            margin: { l: 0, r: 0, t: 40, b: 0 }
           },
-          hovertemplate:
-            "Lon: %{x}<br>Lat: %{y}<br>Depth (km): %{z}<br>Mag: %{marker.color}<extra></extra>"
-        };
-
-        const layout = {
-          title: "3D Earthquake Depth Distribution",
-          scene: {
-            zaxis: { autorange: "reversed", title: "Depth (km)" },
-            xaxis: { title: "Longitude" },
-            yaxis: { title: "Latitude" }
-          },
-          margin: { l: 0, r: 0, t: 40, b: 0 }
-        };
-
-        await Plotly.newPlot("plot", [trace], layout, { responsive: true });
+          { responsive: true }
+        );
       } catch (err) {
         console.error(err);
-        mount.textContent = "Error loading data (open the browser console for details).";
+        document.getElementById("plot").textContent =
+          "Error loading data (see console).";
       }
     }
 
-    // Initial render + update when EB selection changes
+    // In iframe, hash won’t change — EB updates query string instead
     window.addEventListener("hashchange", plot);
+
     plot();
   </script>
 </body>
