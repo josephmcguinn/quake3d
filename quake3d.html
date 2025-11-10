@@ -1,58 +1,155 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8" />
   <title>3D Earthquake Depth Visualization</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-  <style>html,body{margin:0;height:100%}</style>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #plot { width: 100%; height: 100vh; display:flex; align-items:center; justify-content:center; }
+  </style>
 </head>
 <body>
-  <div id="plot" style="width:100%;height:100vh;display:flex;align-items:center;justify-content:center;">Loading…</div>
-  <script>
-    async function plot() {
-      try {
-        // 1) Query your hosted feature layer directly (PUBLIC)
-        const url = "https://services.arcgis.com/oEazpvC7G00gPDRM/arcgis/rest/services/SC_Earthquakes/FeatureServer/0/query" +
-          "?where=1%3D1" +
-          "&outFields=longitude,latitude,depth,mag" +
-          "&returnGeometry=false" +
-          "&f=geojson";
+  <div id="plot">Loading…</div>
 
-        const res = await fetch(url);
+  <script>
+    "use strict";
+
+    // ---- CONFIG: your Feature Service (Layer 0), fields, etc. ----
+    const SERVICE_BASE =
+      "https://services.arcgis.com/acgZYxoN5Oj8pDLa/arcgis/rest/services/SC_Earthquakes_test_jmcguinn/FeatureServer/0/query";
+    const DEPTH_FIELD = "depth_km";
+    const MAG_FIELD   = "mag";
+
+    // ---- Parse Experience Builder selection from URL hash ----
+    function parseExperienceHash() {
+      const raw = window.location.hash || "";
+      const out = { geometry: null, spatialRel: null };
+      if (!raw.includes("data_s=")) return out;
+
+      const decoded = decodeURIComponent(raw.slice(1)); // strip '#'
+      const after = decoded.split("data_s=")[1] || "";
+
+      // Find JSON that follows "geometry:"
+      const geomIdx = after.lastIndexOf("geometry:");
+      if (geomIdx !== -1) {
+        const jsonStart = after.indexOf("{", geomIdx);
+        if (jsonStart !== -1) {
+          let depth = 0, end = -1;
+          for (let i = jsonStart; i < after.length; i++) {
+            const ch = after[i];
+            if (ch === "{") depth++;
+            else if (ch === "}") {
+              depth--;
+              if (depth === 0) { end = i; break; }
+            }
+          }
+          if (end !== -1) {
+            try { out.geometry = JSON.parse(after.slice(jsonStart, end + 1)); } catch (_) {}
+          }
+        }
+      }
+
+      // Example token: "spatialRel:...:esriSpatialRelIntersects"
+      const relMatch = after.match(/spatialRel:[^:]+:[^,]+/g);
+      if (relMatch?.length) out.spatialRel = relMatch.at(-1).split(":").pop();
+
+      return out;
+    }
+
+    // ---- Build ArcGIS REST /query URL ----
+    function buildQueryURL(geomInfo) {
+      const params = new URLSearchParams({
+        where: "1=1",
+        outFields: "*",
+        returnGeometry: "true",
+        f: "geojson"
+      });
+
+      if (geomInfo?.geometry) {
+        params.set("geometry", JSON.stringify(geomInfo.geometry));
+        const isPolygon = !!geomInfo.geometry.rings;
+        params.set("geometryType", isPolygon ? "esriGeometryPolygon" : "esriGeometryEnvelope");
+        // Experience Builder selections are in Web Mercator
+        params.set("inSR", String(geomInfo.geometry.spatialReference?.wkid || 102100));
+        if (geomInfo.spatialRel) params.set("spatialRel", geomInfo.spatialRel);
+      }
+
+      return `${SERVICE_BASE}?${params.toString()}`;
+    }
+
+    // ---- Fetch, transform, and plot ----
+    async function plot() {
+      const mount = document.getElementById("plot");
+      mount.textContent = "Loading…";
+
+      try {
+        const sel = parseExperienceHash();
+        const url = buildQueryURL(sel);
+
+        const res = await fetch(url, { mode: "cors" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        const feats = (data.features || []).map(f => f.properties);
 
+        const feats = data.features || [];
         if (!feats.length) {
-          document.getElementById("plot").innerHTML = "No features returned. Check layer sharing and field names.";
+          mount.innerHTML = "No features returned. If you used a selection, make sure it intersects earthquakes and the layer is shared publicly.";
+          return;
+        }
+
+        const xs = [], ys = [], zs = [], mags = [];
+        for (const f of feats) {
+          const coords = f.geometry?.coordinates;
+          if (!Array.isArray(coords)) continue;
+          const x = Number(coords[0]);
+          const y = Number(coords[1]);
+          const depth = Number(f.properties?.[DEPTH_FIELD] ?? 0);
+          const mag   = Number(f.properties?.[MAG_FIELD]   ?? 0);
+          if (!Number.isNaN(x) && !Number.isNaN(y)) {
+            xs.push(x); ys.push(y); zs.push(depth); mags.push(mag);
+          }
+        }
+
+        if (!xs.length) {
+          mount.innerHTML = "Features returned, but no usable point coordinates found.";
           return;
         }
 
         const trace = {
-          x: feats.map(f => f.longitude),
-          y: feats.map(f => f.latitude),
-          z: feats.map(f => f.depth),
+          x: xs, y: ys, z: zs,
           mode: "markers",
+          type: "scatter3d",
           marker: {
-            size: feats.map(f => (Number(f.mag) || 0) * 2),
-            color: feats.map(f => Number(f.mag) || 0),
-            opacity: 0.8
+            size: mags.map(m => (m || 0) * 2),
+            color: mags,
+            opacity: 0.85,
+            colorbar: { title: "Magnitude" }
           },
-          type: "scatter3d"
+          hovertemplate:
+            "Lon: %{x}<br>Lat: %{y}<br>Depth (km): %{z}<br>Mag: %{marker.color}<extra></extra>"
         };
 
-        Plotly.newPlot("plot", [trace], {
+        const layout = {
           title: "3D Earthquake Depth Distribution",
-          scene: { zaxis: { autorange: "reversed" } }
-        });
-      } catch (e) {
-        console.error(e);
-        document.getElementById("plot").innerHTML = "Error loading data (see console).";
+          scene: {
+            zaxis: { autorange: "reversed", title: "Depth (km)" },
+            xaxis: { title: "Longitude" },
+            yaxis: { title: "Latitude" }
+          },
+          margin: { l: 0, r: 0, t: 40, b: 0 }
+        };
+
+        await Plotly.newPlot("plot", [trace], layout, { responsive: true });
+      } catch (err) {
+        console.error(err);
+        mount.textContent = "Error loading data (open the browser console for details).";
       }
     }
+
+    // Initial render + update when EB selection changes
+    window.addEventListener("hashchange", plot);
     plot();
   </script>
 </body>
 </html>
-
-
