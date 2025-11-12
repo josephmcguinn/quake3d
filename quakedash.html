@@ -119,7 +119,141 @@
       "https://services.arcgis.com/acgZYxoN5Oj8pDLa/arcgis/rest/services/SC_Earthquakes_test_jmcguinn/FeatureServer/0";
     const DEPTH_FIELD = "depth_km";
     const MAG_FIELD   = "mag";
-
+    // ========= DEM helpers (Terrain-RGB -> elevations) =========
+    const MAPTILER_KEY = "YOUR_MAPTILER_KEY"; // <-- put your key here
+    const TERRAIN_ZOOM = 9; // 8–10 is fine for a state-sized view
+  
+    // WebMercator helpers
+    const tile2lon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
+    const tile2lat = (y, z) => {
+      const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
+      return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+    };
+  
+    // Decode Mapbox/MapTiler Terrain-RGB to meters
+    function rgbToMeters(r, g, b) {
+      // elevation (meters) = -10000 + (R*256*256 + G*256 + B) * 0.1
+      return -10000 + (r * 256 * 256 + g * 256 + b) * 0.1;
+    }
+  
+    // Fetch one Terrain-RGB tile and return a Float32Array of elevations + size
+    async function fetchTerrainTile(z, x, y) {
+      const url =
+        `https://api.maptiler.com/tiles/terrain-rgb-v2/${z}/${x}/${y}.png?key=${MAPTILER_KEY}`;
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.decoding = "async";
+      img.src = url;
+      await img.decode();
+  
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      const { data, width, height } = ctx.getImageData(0, 0, img.width, img.height);
+      const out = new Float32Array(width * height);
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        out[p] = rgbToMeters(data[i], data[i + 1], data[i + 2]); // ignore alpha
+      }
+      return { elev: out, width, height };
+    }
+  
+    // Build a DEM (lon grid, lat grid, z meters) for a bbox {minLon,minLat,maxLon,maxLat}
+    async function buildDEMForBBox(bbox) {
+      const z = TERRAIN_ZOOM;
+  
+      // tiles covering bbox
+      function lon2tile(lon, z) { return Math.floor(((lon + 180) / 360) * Math.pow(2, z)); }
+      function lat2tile(lat, z) {
+        return Math.floor(
+          ((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) *
+            Math.pow(2, z)
+        );
+      }
+      const x0 = lon2tile(bbox.minLon, z);
+      const x1 = lon2tile(bbox.maxLon, z);
+      const y0 = lat2tile(bbox.maxLat, z); // note swapped for TMS math
+      const y1 = lat2tile(bbox.minLat, z);
+  
+      // stitch tiles
+      let W = 0, H = 0;
+      const tiles = [];
+      for (let ty = y0; ty <= y1; ty++) {
+        const row = [];
+        let wRow = 0, hRow = 0;
+        for (let tx = x0; tx <= x1; tx++) {
+          const t = await fetchTerrainTile(z, tx, ty);
+          row.push(t);
+          wRow += t.width;
+          hRow = t.height; // all equal
+        }
+        tiles.push(row);
+        W = wRow;
+        H += hRow;
+      }
+  
+      // compose elevation raster
+      const Zm = new Float32Array(W * H);
+      let yOff = 0;
+      for (let r = 0; r < tiles.length; r++) {
+        const row = tiles[r];
+        const h = row[0].height;
+        let xOff = 0;
+        for (let c2 = 0; c2 < row.length; c2++) {
+          const { elev, width, height } = row[c2];
+          // blit row by row
+          for (let yy = 0; yy < height; yy++) {
+            Zm.set(elev.subarray(yy * width, (yy + 1) * width), (yOff + yy) * W + xOff);
+          }
+          xOff += width;
+        }
+        yOff += h;
+      }
+  
+      // lon/lat grids for each pixel center
+      const lonGrid = new Float32Array(W * H);
+      const latGrid = new Float32Array(W * H);
+      for (let yy = 0; yy < H; yy++) {
+        // interpolate tile row to geo
+        const yFrac = yy / H;
+        const ty = y0 + yFrac * (y1 - y0 + 1);
+        const latTop = tile2lat(Math.floor(ty), z);
+        const latBot = tile2lat(Math.floor(ty) + 1, z);
+        const latRowStart = latTop;
+        const latRowEnd = latBot;
+        const latRow = latRowStart + (latRowEnd - latRowStart) * (ty - Math.floor(ty));
+  
+        for (let xx = 0; xx < W; xx++) {
+          const xFrac = xx / W;
+          const tx = x0 + xFrac * (x1 - x0 + 1);
+          const lonLeft = tile2lon(Math.floor(tx), z);
+          const lonRight = tile2lon(Math.floor(tx) + 1, z);
+          const lonCol = lonLeft + (lonRight - lonLeft) * (tx - Math.floor(tx));
+  
+          const idx = yy * W + xx;
+          lonGrid[idx] = lonCol;
+          latGrid[idx] = latRow;
+        }
+      }
+  
+      // reshape 1D arrays to 2D matrices for Plotly surface (row-major)
+      function reshape(arr, rows, cols) {
+        const out = new Array(rows);
+        for (let r = 0; r < rows; r++) {
+          out[r] = Array.from(arr.subarray(r * cols, (r + 1) * cols));
+        }
+        return out;
+      }
+  
+      return {
+        X: reshape(lonGrid, H, W),
+        Y: reshape(latGrid, H, W),
+        // convert meters to kilometers to match your depth axis units
+        Zkm: reshape(Zm.map(v => v / 1000), H, W)
+      };
+    }
+    
     /* =========================
        MAP SETUP
        ========================= */
@@ -246,44 +380,80 @@
       }
     }
 
-    async function renderPlot(features) {
+  async function renderPlot(features) {
       const xs = [], ys = [], zs = [], mags = [];
       for (const f of features) {
         const c = f.geometry?.coordinates;
         if (!c) continue;
         xs.push(+c[0]); ys.push(+c[1]);
-        zs.push(Number(f.properties?.[DEPTH_FIELD] ?? 0));
+        zs.push(Number(f.properties?.[DEPTH_FIELD] ?? 0));  // km (positive down)
         mags.push(Number(f.properties?.[MAG_FIELD]   ?? 0));
       }
+  
       if (!xs.length) {
         Plotly.newPlot("plot", [], { title: "No features in view" });
         return;
       }
-
-      const trace = {
+  
+      // ---- Build bbox from features to fetch a DEM slab ----
+      const minLon = Math.min(...xs), maxLon = Math.max(...xs);
+      const minLat = Math.min(...ys), maxLat = Math.max(...ys);
+      const pad = 0.25; // small cushion around data
+      const bbox = {
+        minLon: minLon - pad, maxLon: maxLon + pad,
+        minLat: minLat - pad, maxLat: maxLat + pad
+      };
+  
+      let surfaceTrace = null;
+      try {
+        const dem = await buildDEMForBBox(bbox);
+        surfaceTrace = {
+          type: "surface",
+          x: dem.X, y: dem.Y, z: dem.Zkm,  // km above sea level
+          opacity: 0.9,
+          colorscale: "Earth",
+          showscale: false,
+          name: "Terrain",
+          // Make it look like a 'lid' the quakes hang beneath:
+          contours: { z: { show: false } }
+        };
+      } catch (e) {
+        console.warn("Terrain surface failed, continuing without it:", e);
+      }
+  
+      // Quake points (under the surface since z-axis is reversed)
+      const quakesTrace = {
         x: xs, y: ys, z: zs,
         mode: "markers",
         type: "scatter3d",
         marker: {
           size: mags.map(m => (m || 0) * 2),
           color: mags,
-          opacity: 0.85,
+          opacity: 0.88,
           colorbar: { title: "Magnitude" }
         },
+        name: "Earthquakes",
         hovertemplate: "Lon: %{x}<br>Lat: %{y}<br>Depth (km): %{z}<br>Mag: %{marker.color}<extra></extra>"
       };
-
+  
+      // Compute z range: terrain (>=0 km) down to deepest quake
+      const deepest = Math.max(...zs);
       const layout = {
         title: "3D Earthquake Depth",
         scene: {
-          zaxis: { autorange: "reversed", title: "Depth (km)" },
+          zaxis: {
+            autorange: "reversed",
+            title: "Depth (km)",
+            range: [Math.max(0, surfaceTrace ? 5 : 0), deepest] // give a bit of headroom
+          },
           xaxis: { title: "Longitude" },
           yaxis: { title: "Latitude" }
         },
         margin: { l: 0, r: 0, t: 35, b: 0 }
       };
-
-      await Plotly.newPlot("plot", [trace], layout, { responsive: true });
+  
+      const traces = surfaceTrace ? [surfaceTrace, quakesTrace] : [quakesTrace];
+      await Plotly.newPlot("plot", traces, layout, { responsive: true });
     }
 
     async function refresh() {
