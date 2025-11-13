@@ -51,6 +51,17 @@
       padding:6px 10px; border-top:1px solid #eee; background:#fafafa; font-size:12px; color:#444;
     }
 
+    /* NEW: style for bottom bar button */
+    .bar button {
+      padding: 4px 8px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background:#fff;
+      cursor:pointer;
+      font-size: 11px;
+    }
+    .bar button:hover { background:#f0f0f0; }
+
     @media (max-width: 1100px) {
       :root { --sidebar: 280px; }
     }
@@ -101,7 +112,11 @@
         <div id="plot"></div>
         <div class="bar">
           <span id="selMsg">No spatial filter</span>
-          <span>Depth axis is reversed (down = deeper).</span>
+          <!-- NEW: plane toggle button in the bottom bar -->
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button id="planeBtn">Compute 3D plane</button>
+            <span>Depth axis is reversed (down = deeper).</span>
+          </div>
         </div>
       </div>
     </section>
@@ -114,16 +129,15 @@
     /* =========================
        CONFIG — change these later if needed
        ========================= */
-    // You can provide either the layer URL (without /query) OR the /query endpoint.
     const SERVICE_URL =
       "https://services.arcgis.com/acgZYxoN5Oj8pDLa/arcgis/rest/services/SC_Earthquakes_test_jmcguinn/FeatureServer/0";
     const DEPTH_FIELD = "depth_km";
     const MAG_FIELD   = "mag";
+
     // ========= DEM helpers (Terrain-RGB -> elevations) =========
     const MAPTILER_KEY = "pk_xxxxxxxxxxxxxxxxxxxxxxxxx"; // <-- put your key here
     const TERRAIN_ZOOM = 9; // 8–10 is fine for a state-sized view
   
-    // WebMercator helpers
     const tile2lon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
     const tile2lat = (y, z) => {
       const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
@@ -132,11 +146,9 @@
   
     // Decode Mapbox/MapTiler Terrain-RGB to meters
     function rgbToMeters(r, g, b) {
-      // elevation (meters) = -10000 + (R*256*256 + G*256 + B) * 0.1
       return -10000 + (r * 256 * 256 + g * 256 + b) * 0.1;
     }
   
-    // Fetch one Terrain-RGB tile and return a Float32Array of elevations + size
     async function fetchTerrainTile(z, x, y) {
       const url =
         `https://api.maptiler.com/tiles/terrain-rgb-v2/${z}/${x}/${y}.png?key=${MAPTILER_KEY}`;
@@ -159,11 +171,9 @@
       return { elev: out, width, height };
     }
   
-    // Build a DEM (lon grid, lat grid, z meters) for a bbox {minLon,minLat,maxLon,maxLat}
     async function buildDEMForBBox(bbox) {
       const z = TERRAIN_ZOOM;
   
-      // tiles covering bbox
       function lon2tile(lon, z) { return Math.floor(((lon + 180) / 360) * Math.pow(2, z)); }
       function lat2tile(lat, z) {
         return Math.floor(
@@ -173,10 +183,9 @@
       }
       const x0 = lon2tile(bbox.minLon, z);
       const x1 = lon2tile(bbox.maxLon, z);
-      const y0 = lat2tile(bbox.maxLat, z); // note swapped for TMS math
+      const y0 = lat2tile(bbox.maxLat, z);
       const y1 = lat2tile(bbox.minLat, z);
   
-      // stitch tiles
       let W = 0, H = 0;
       const tiles = [];
       for (let ty = y0; ty <= y1; ty++) {
@@ -186,14 +195,13 @@
           const t = await fetchTerrainTile(z, tx, ty);
           row.push(t);
           wRow += t.width;
-          hRow = t.height; // all equal
+          hRow = t.height;
         }
         tiles.push(row);
         W = wRow;
         H += hRow;
       }
   
-      // compose elevation raster
       const Zm = new Float32Array(W * H);
       let yOff = 0;
       for (let r = 0; r < tiles.length; r++) {
@@ -202,7 +210,6 @@
         let xOff = 0;
         for (let c2 = 0; c2 < row.length; c2++) {
           const { elev, width, height } = row[c2];
-          // blit row by row
           for (let yy = 0; yy < height; yy++) {
             Zm.set(elev.subarray(yy * width, (yy + 1) * width), (yOff + yy) * W + xOff);
           }
@@ -211,11 +218,9 @@
         yOff += h;
       }
   
-      // lon/lat grids for each pixel center
       const lonGrid = new Float32Array(W * H);
       const latGrid = new Float32Array(W * H);
       for (let yy = 0; yy < H; yy++) {
-        // interpolate tile row to geo
         const yFrac = yy / H;
         const ty = y0 + yFrac * (y1 - y0 + 1);
         const latTop = tile2lat(Math.floor(ty), z);
@@ -237,7 +242,6 @@
         }
       }
   
-      // reshape 1D arrays to 2D matrices for Plotly surface (row-major)
       function reshape(arr, rows, cols) {
         const out = new Array(rows);
         for (let r = 0; r < rows; r++) {
@@ -249,7 +253,6 @@
       return {
         X: reshape(lonGrid, H, W),
         Y: reshape(latGrid, H, W),
-        // convert meters to kilometers to match your depth axis units
         Zkm: reshape(Zm.map(v => v / 1000), H, W)
       };
     }
@@ -275,32 +278,31 @@
     });
     map.addControl(drawControl);
 
-    // Layer for quake dots
     const quakesLayer = L.layerGroup().addTo(map);
 
-    // UI elements
     const statusEl = document.getElementById("status");
     const countsEl = document.getElementById("counts");
     const selMsgEl = document.getElementById("selMsg");
     const minMagEl = document.getElementById("minMag");
+    const planeBtn  = document.getElementById("planeBtn"); // NEW
 
-    // Current selection + filters
-    let currentGeometry = null;  // ArcGIS-style geometry (rings in [x,y] = [lon,lat])
+    let currentGeometry = null;
     let currentWhere     = null;
+
+    // NEW: plane toggle state + last fetched features
+    let planeEnabled = false;
+    let lastFeatures = [];
 
     /* =========================
        HELPERS
        ========================= */
     function serviceQueryUrl() {
-      // Accept either .../0 or .../0/query in SERVICE_URL
       return SERVICE_URL.endsWith("/query") ? SERVICE_URL : `${SERVICE_URL}/query`;
     }
 
     function toEsriPolygonFromLeaflet(layer) {
-      // Build a polygon geometry in wkid 4326 from a Leaflet polygon/rectangle
-      const latlngs = layer.getLatLngs()[0]; // first ring
+      const latlngs = layer.getLatLngs()[0];
       const ring = latlngs.map(ll => [Number(ll.lng), Number(ll.lat)]);
-      // close ring
       if (ring.length && (ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1])) {
         ring.push([ring[0][0], ring[0][1]]);
       }
@@ -331,6 +333,65 @@
     function setCounts(n)     { countsEl.textContent = `${n.toLocaleString()} features`; }
     function setSelMessage(on){ selMsgEl.textContent = on ? "Spatial filter: polygon/rectangle" : "No spatial filter"; }
 
+    // NEW: solve 3x3 system and fit plane z = a x + b y + c
+    function solve3x3(m, b) {
+      const a11 = m[0][0], a12 = m[0][1], a13 = m[0][2];
+      const a21 = m[1][0], a22 = m[1][1], a23 = m[1][2];
+      const a31 = m[2][0], a32 = m[2][1], a33 = m[2][2];
+
+      const det =
+        a11 * (a22 * a33 - a23 * a32) -
+        a12 * (a21 * a33 - a23 * a31) +
+        a13 * (a21 * a32 - a22 * a31);
+
+      if (Math.abs(det) < 1e-12) return null;
+
+      const inv11 = (a22 * a33 - a23 * a32) / det;
+      const inv12 = (a13 * a32 - a12 * a33) / det;
+      const inv13 = (a12 * a23 - a13 * a22) / det;
+      const inv21 = (a23 * a31 - a21 * a33) / det;
+      const inv22 = (a11 * a33 - a13 * a31) / det;
+      const inv23 = (a13 * a21 - a11 * a23) / det;
+      const inv31 = (a21 * a32 - a22 * a31) / det;
+      const inv32 = (a12 * a31 - a11 * a32) / det;
+      const inv33 = (a11 * a22 - a12 * a21) / det;
+
+      const x = inv11 * b[0] + inv12 * b[1] + inv13 * b[2];
+      const y = inv21 * b[0] + inv22 * b[1] + inv23 * b[2];
+      const z = inv31 * b[0] + inv32 * b[1] + inv33 * b[2];
+
+      return [x, y, z];
+    }
+
+    function fitPlane(xs, ys, zs) {
+      const n = xs.length;
+      if (n < 3) return null;
+
+      let Sx=0, Sy=0, Sz=0, Sxx=0, Syy=0, Sxy=0, Sxz=0, Syz=0;
+      for (let i = 0; i < n; i++) {
+        const x = xs[i], y = ys[i], z = zs[i];
+        Sx  += x;
+        Sy  += y;
+        Sz  += z;
+        Sxx += x * x;
+        Syy += y * y;
+        Sxy += x * y;
+        Sxz += x * z;
+        Syz += y * z;
+      }
+
+      const M = [
+        [Sxx, Sxy, Sx],
+        [Sxy, Syy, Sy],
+        [Sx,  Sy,  n ]
+      ];
+      const B = [Sxz, Syz, Sz];
+      const sol = solve3x3(M, B);
+      if (!sol) return null;
+      const [a, b, c] = sol;
+      return { a, b, c };
+    }
+
     /* =========================
        DATA FETCH + RENDER
        ========================= */
@@ -346,12 +407,10 @@
 
     function renderOnMap(features) {
       quakesLayer.clearLayers();
-      // Use Canvas circle markers for speed
       features.forEach(f => {
         const c = f.geometry && f.geometry.coordinates;
         if (!c) return;
         const lon = +c[0], lat = +c[1];
-        // marker size by magnitude (min size 3)
         const mag = Number(f.properties?.[MAG_FIELD] ?? 0);
         const r = Math.max(3, mag * 2.0);
         const dot = L.circleMarker([lat, lon], {
@@ -368,25 +427,24 @@
         quakesLayer.addLayer(dot);
       });
 
-      // auto-zoom
       if (features.length) {
         const latlngs = features
           .map(f => f.geometry?.coordinates)
           .filter(Boolean)
           .map(([x, y]) => [y, x]);
         const bounds = L.latLngBounds(latlngs);
-        // fit, but don't zoom too far in
         map.fitBounds(bounds.pad(0.25), { maxZoom: 11 });
       }
     }
 
-  async function renderPlot(features) {
+    async function renderPlot(features) {
       const xs = [], ys = [], zs = [], mags = [];
       for (const f of features) {
         const c = f.geometry?.coordinates;
         if (!c) continue;
-        xs.push(+c[0]); ys.push(+c[1]);
-        zs.push(Number(f.properties?.[DEPTH_FIELD] ?? 0));  // km (positive down)
+        xs.push(+c[0]);
+        ys.push(+c[1]);
+        zs.push(Number(f.properties?.[DEPTH_FIELD] ?? 0));
         mags.push(Number(f.properties?.[MAG_FIELD]   ?? 0));
       }
   
@@ -395,10 +453,9 @@
         return;
       }
   
-      // ---- Build bbox from features to fetch a DEM slab ----
       const minLon = Math.min(...xs), maxLon = Math.max(...xs);
       const minLat = Math.min(...ys), maxLat = Math.max(...ys);
-      const pad = 0.25; // small cushion around data
+      const pad = 0.25;
       const bbox = {
         minLon: minLon - pad, maxLon: maxLon + pad,
         minLat: minLat - pad, maxLat: maxLat + pad
@@ -409,19 +466,17 @@
         const dem = await buildDEMForBBox(bbox);
         surfaceTrace = {
           type: "surface",
-          x: dem.X, y: dem.Y, z: dem.Zkm,  // km above sea level
+          x: dem.X, y: dem.Y, z: dem.Zkm,
           opacity: 0.9,
           colorscale: "Earth",
           showscale: false,
           name: "Terrain",
-          // Make it look like a 'lid' the quakes hang beneath:
           contours: { z: { show: false } }
         };
       } catch (e) {
         console.warn("Terrain surface failed, continuing without it:", e);
       }
   
-      // Quake points (under the surface since z-axis is reversed)
       const quakesTrace = {
         x: xs, y: ys, z: zs,
         mode: "markers",
@@ -435,30 +490,80 @@
         name: "Earthquakes",
         hovertemplate: "Lon: %{x}<br>Lat: %{y}<br>Depth (km): %{z}<br>Mag: %{marker.color}<extra></extra>"
       };
+
+      // NEW: optional best-fit plane
+      let planeTrace = null;
+      let maxPlaneDepth = 0;
+
+      if (planeEnabled) {
+        const coeffs = fitPlane(xs, ys, zs);
+        if (coeffs) {
+          const { a, b, c } = coeffs;
+          const nx = 15, ny = 15;
+          const planeX = [];
+          const planeY = [];
+          const planeZ = [];
+
+          const spanX = maxLon - minLon || 1;
+          const spanY = maxLat - minLat || 1;
+
+          for (let j = 0; j < ny; j++) {
+            const rowX = [];
+            const rowY = [];
+            const rowZ = [];
+            const yy = minLat + (spanY * j) / (ny - 1 || 1);
+            for (let i = 0; i < nx; i++) {
+              const xx = minLon + (spanX * i) / (nx - 1 || 1);
+              const zz = a * xx + b * yy + c;
+              rowX.push(xx);
+              rowY.push(yy);
+              rowZ.push(zz);
+              if (zz > maxPlaneDepth) maxPlaneDepth = zz;
+            }
+            planeX.push(rowX);
+            planeY.push(rowY);
+            planeZ.push(rowZ);
+          }
+
+          planeTrace = {
+            type: "surface",
+            x: planeX,
+            y: planeY,
+            z: planeZ,
+            opacity: 0.4,
+            showscale: false,
+            name: "Best-fit plane"
+          };
+        }
+      }
   
-      // Compute z range: terrain (>=0 km) down to deepest quake
-      const deepest = Math.max(...zs);
+      const deepest = Math.max(...zs, maxPlaneDepth || 0);
       const layout = {
         title: "3D Earthquake Depth",
         scene: {
           zaxis: {
             autorange: "reversed",
             title: "Depth (km)",
-            range: [Math.max(0, surfaceTrace ? 5 : 0), deepest] // give a bit of headroom
+            range: [0, deepest]
           },
           xaxis: { title: "Longitude" },
           yaxis: { title: "Latitude" }
         },
         margin: { l: 0, r: 0, t: 35, b: 0 }
       };
+
+      const traces = [];
+      if (surfaceTrace) traces.push(surfaceTrace);
+      if (planeTrace)   traces.push(planeTrace);
+      traces.push(quakesTrace);
   
-      const traces = surfaceTrace ? [surfaceTrace, quakesTrace] : [quakesTrace];
       await Plotly.newPlot("plot", traces, layout, { responsive: true });
     }
 
     async function refresh() {
       try {
         const feats = await fetchQuakes();
+        lastFeatures = feats; // NEW: keep for plane toggling
         setCounts(feats.length);
         renderOnMap(feats);
         renderPlot(feats);
@@ -472,7 +577,6 @@
     /* =========================
        INTERACTION WIRES
        ========================= */
-    // Draw created
     map.on(L.Draw.Event.CREATED, e => {
       drawnItems.clearLayers();
       drawnItems.addLayer(e.layer);
@@ -481,7 +585,6 @@
       refresh();
     });
 
-    // Remove selection
     map.on(L.Draw.Event.DELETED, () => {
       drawnItems.clearLayers();
       currentGeometry = null;
@@ -489,7 +592,6 @@
       refresh();
     });
 
-    // Apply min magnitude
     document.getElementById("applyBtn").addEventListener("click", () => {
       const minMag = Number(minMagEl.value) || 0;
       currentWhere = `${MAG_FIELD} >= ${minMag}`;
@@ -505,6 +607,15 @@
 
     document.getElementById("reloadBtn").addEventListener("click", () => {
       refresh();
+    });
+
+    // NEW: plane toggle button behavior
+    planeBtn.addEventListener("click", () => {
+      planeEnabled = !planeEnabled;
+      planeBtn.textContent = planeEnabled ? "Hide 3D plane" : "Compute 3D plane";
+      if (lastFeatures && lastFeatures.length) {
+        renderPlot(lastFeatures);
+      }
     });
 
     // Initial load
