@@ -51,7 +51,7 @@
       padding:6px 10px; border-top:1px solid #eee; background:#fafafa; font-size:12px; color:#444;
     }
 
-    /* NEW: style for bottom bar button */
+    /* bottom bar button */
     .bar button {
       padding: 4px 8px;
       border: 1px solid #ccc;
@@ -98,6 +98,9 @@
       <div class="status" id="status">Ready.</div>
       <div class="small" id="counts"></div>
 
+      <!-- plane orientation info -->
+      <div id="planeInfo" class="small" style="margin-top:8px;color:#444;"></div>
+
       <hr style="margin:10px 0; border:none; border-top:1px solid #eee">
       <div class="small">
         <b>Tip:</b> To point at a different dataset later, change
@@ -112,7 +115,6 @@
         <div id="plot"></div>
         <div class="bar">
           <span id="selMsg">No spatial filter</span>
-          <!-- NEW: plane toggle button in the bottom bar -->
           <div style="display:flex;align-items:center;gap:8px;">
             <button id="planeBtn">Compute 3D plane</button>
             <span>Depth axis is reversed (down = deeper).</span>
@@ -127,28 +129,27 @@
     "use strict";
 
     /* =========================
-       CONFIG — change these later if needed
+       CONFIG
        ========================= */
     const SERVICE_URL =
       "https://services.arcgis.com/acgZYxoN5Oj8pDLa/arcgis/rest/services/SC_Earthquakes_test_jmcguinn/FeatureServer/0";
     const DEPTH_FIELD = "depth_km";
     const MAG_FIELD   = "mag";
 
-    // ========= DEM helpers (Terrain-RGB -> elevations) =========
-    const MAPTILER_KEY = "pk_xxxxxxxxxxxxxxxxxxxxxxxxx"; // <-- put your key here
-    const TERRAIN_ZOOM = 9; // 8–10 is fine for a state-sized view
-  
+    // DEM helpers (MapTiler Terrain-RGB)
+    const MAPTILER_KEY = "pk_xxxxxxxxxxxxxxxxxxxxxxxxx"; // <-- your key
+    const TERRAIN_ZOOM = 9;
+
     const tile2lon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
     const tile2lat = (y, z) => {
       const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
       return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
     };
-  
-    // Decode Mapbox/MapTiler Terrain-RGB to meters
+
     function rgbToMeters(r, g, b) {
       return -10000 + (r * 256 * 256 + g * 256 + b) * 0.1;
     }
-  
+
     async function fetchTerrainTile(z, x, y) {
       const url =
         `https://api.maptiler.com/tiles/terrain-rgb-v2/${z}/${x}/${y}.png?key=${MAPTILER_KEY}`;
@@ -157,7 +158,7 @@
       img.decoding = "async";
       img.src = url;
       await img.decode();
-  
+
       const c = document.createElement("canvas");
       c.width = img.width;
       c.height = img.height;
@@ -166,14 +167,14 @@
       const { data, width, height } = ctx.getImageData(0, 0, img.width, img.height);
       const out = new Float32Array(width * height);
       for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-        out[p] = rgbToMeters(data[i], data[i + 1], data[i + 2]); // ignore alpha
+        out[p] = rgbToMeters(data[i], data[i + 1], data[i + 2]);
       }
       return { elev: out, width, height };
     }
-  
+
     async function buildDEMForBBox(bbox) {
       const z = TERRAIN_ZOOM;
-  
+
       function lon2tile(lon, z) { return Math.floor(((lon + 180) / 360) * Math.pow(2, z)); }
       function lat2tile(lat, z) {
         return Math.floor(
@@ -185,7 +186,7 @@
       const x1 = lon2tile(bbox.maxLon, z);
       const y0 = lat2tile(bbox.maxLat, z);
       const y1 = lat2tile(bbox.minLat, z);
-  
+
       let W = 0, H = 0;
       const tiles = [];
       for (let ty = y0; ty <= y1; ty++) {
@@ -201,7 +202,7 @@
         W = wRow;
         H += hRow;
       }
-  
+
       const Zm = new Float32Array(W * H);
       let yOff = 0;
       for (let r = 0; r < tiles.length; r++) {
@@ -217,7 +218,7 @@
         }
         yOff += h;
       }
-  
+
       const lonGrid = new Float32Array(W * H);
       const latGrid = new Float32Array(W * H);
       for (let yy = 0; yy < H; yy++) {
@@ -228,20 +229,20 @@
         const latRowStart = latTop;
         const latRowEnd = latBot;
         const latRow = latRowStart + (latRowEnd - latRowStart) * (ty - Math.floor(ty));
-  
+
         for (let xx = 0; xx < W; xx++) {
           const xFrac = xx / W;
           const tx = x0 + xFrac * (x1 - x0 + 1);
           const lonLeft = tile2lon(Math.floor(tx), z);
           const lonRight = tile2lon(Math.floor(tx) + 1, z);
           const lonCol = lonLeft + (lonRight - lonLeft) * (tx - Math.floor(tx));
-  
+
           const idx = yy * W + xx;
           lonGrid[idx] = lonCol;
           latGrid[idx] = latRow;
         }
       }
-  
+
       function reshape(arr, rows, cols) {
         const out = new Array(rows);
         for (let r = 0; r < rows; r++) {
@@ -249,14 +250,14 @@
         }
         return out;
       }
-  
+
       return {
         X: reshape(lonGrid, H, W),
         Y: reshape(latGrid, H, W),
         Zkm: reshape(Zm.map(v => v / 1000), H, W)
       };
     }
-    
+
     /* =========================
        MAP SETUP
        ========================= */
@@ -280,16 +281,17 @@
 
     const quakesLayer = L.layerGroup().addTo(map);
 
-    const statusEl = document.getElementById("status");
-    const countsEl = document.getElementById("counts");
-    const selMsgEl = document.getElementById("selMsg");
-    const minMagEl = document.getElementById("minMag");
-    const planeBtn  = document.getElementById("planeBtn"); // NEW
+    const statusEl   = document.getElementById("status");
+    const countsEl   = document.getElementById("counts");
+    const selMsgEl   = document.getElementById("selMsg");
+    const minMagEl   = document.getElementById("minMag");
+    const planeBtn   = document.getElementById("planeBtn");
+    const planeInfoEl = document.getElementById("planeInfo");
 
     let currentGeometry = null;
     let currentWhere     = null;
 
-    // NEW: plane toggle state + last fetched features
+    // plane toggle and last fetched features
     let planeEnabled = false;
     let lastFeatures = [];
 
@@ -333,7 +335,7 @@
     function setCounts(n)     { countsEl.textContent = `${n.toLocaleString()} features`; }
     function setSelMessage(on){ selMsgEl.textContent = on ? "Spatial filter: polygon/rectangle" : "No spatial filter"; }
 
-    // NEW: solve 3x3 system and fit plane z = a x + b y + c
+    // solve 3x3 linear system
     function solve3x3(m, b) {
       const a11 = m[0][0], a12 = m[0][1], a13 = m[0][2];
       const a21 = m[1][0], a22 = m[1][1], a23 = m[1][2];
@@ -363,6 +365,7 @@
       return [x, y, z];
     }
 
+    // least-squares plane z = a x + b y + c
     function fitPlane(xs, ys, zs) {
       const n = xs.length;
       if (n < 3) return null;
@@ -390,6 +393,38 @@
       if (!sol) return null;
       const [a, b, c] = sol;
       return { a, b, c };
+    }
+
+    // normal vector from plane z = a x + b y + c
+    function planeNormal(a, b) {
+      const nx = a, ny = b, nz = -1;
+      const L = Math.sqrt(nx*nx + ny*ny + nz*nz);
+      return { nx: nx/L, ny: ny/L, nz: nz/L };
+    }
+
+    // normal -> strike/dip (degrees)
+    function normalToStrikeDip(nx, ny, nz) {
+      const dipRad = Math.atan2(Math.sqrt(nx*nx + ny*ny), Math.abs(nz));
+      const dipDeg = dipRad * 180 / Math.PI;
+
+      // strike: rotate horizontal projection 90° clockwise
+      let strikeRad = Math.atan2(nx, ny);
+      let strikeDeg = strikeRad * 180 / Math.PI;
+      strikeDeg = (strikeDeg + 360) % 360;
+
+      return { strike: strikeDeg, dip: dipDeg };
+    }
+
+    // RMS misfit to plane
+    function rmsMisfit(xs, ys, zs, a, b, c) {
+      const n = xs.length;
+      let sumSq = 0;
+      for (let i = 0; i < n; i++) {
+        const zhat = a*xs[i] + b*ys[i] + c;
+        const diff = zs[i] - zhat;
+        sumSq += diff*diff;
+      }
+      return Math.sqrt(sumSq / n);
     }
 
     /* =========================
@@ -447,12 +482,13 @@
         zs.push(Number(f.properties?.[DEPTH_FIELD] ?? 0));
         mags.push(Number(f.properties?.[MAG_FIELD]   ?? 0));
       }
-  
+
       if (!xs.length) {
+        planeInfoEl.textContent = "";
         Plotly.newPlot("plot", [], { title: "No features in view" });
         return;
       }
-  
+
       const minLon = Math.min(...xs), maxLon = Math.max(...xs);
       const minLat = Math.min(...ys), maxLat = Math.max(...ys);
       const pad = 0.25;
@@ -460,7 +496,7 @@
         minLon: minLon - pad, maxLon: maxLon + pad,
         minLat: minLat - pad, maxLat: maxLat + pad
       };
-  
+
       let surfaceTrace = null;
       try {
         const dem = await buildDEMForBBox(bbox);
@@ -476,7 +512,7 @@
       } catch (e) {
         console.warn("Terrain surface failed, continuing without it:", e);
       }
-  
+
       const quakesTrace = {
         x: xs, y: ys, z: zs,
         mode: "markers",
@@ -491,7 +527,7 @@
         hovertemplate: "Lon: %{x}<br>Lat: %{y}<br>Depth (km): %{z}<br>Mag: %{marker.color}<extra></extra>"
       };
 
-      // NEW: optional best-fit plane
+      // optional best-fit plane
       let planeTrace = null;
       let maxPlaneDepth = 0;
 
@@ -499,21 +535,29 @@
         const coeffs = fitPlane(xs, ys, zs);
         if (coeffs) {
           const { a, b, c } = coeffs;
-          const nx = 15, ny = 15;
-          const planeX = [];
-          const planeY = [];
-          const planeZ = [];
 
+          // orientation + RMS
+          const { nx, ny, nz } = planeNormal(a, b);
+          const { strike, dip } = normalToStrikeDip(nx, ny, nz);
+          const rms = rmsMisfit(xs, ys, zs, a, b, c);
+
+          const strikeFmt = strike.toFixed(0).padStart(3, "0");
+          const dipFmt = dip.toFixed(0);
+          const rmsFmt = rms.toFixed(2);
+
+          planeInfoEl.textContent =
+            `Best-fit plane: strike ${strikeFmt}°, dip ${dipFmt}° (N=${xs.length}, RMS=${rmsFmt} km)`;
+
+          const nxg = 15, nyg = 15;
+          const planeX = [], planeY = [], planeZ = [];
           const spanX = maxLon - minLon || 1;
           const spanY = maxLat - minLat || 1;
 
-          for (let j = 0; j < ny; j++) {
-            const rowX = [];
-            const rowY = [];
-            const rowZ = [];
-            const yy = minLat + (spanY * j) / (ny - 1 || 1);
-            for (let i = 0; i < nx; i++) {
-              const xx = minLon + (spanX * i) / (nx - 1 || 1);
+          for (let j = 0; j < nyg; j++) {
+            const rowX = [], rowY = [], rowZ = [];
+            const yy = minLat + (spanY * j) / (nyg - 1 || 1);
+            for (let i = 0; i < nxg; i++) {
+              const xx = minLon + (spanX * i) / (nxg - 1 || 1);
               const zz = a * xx + b * yy + c;
               rowX.push(xx);
               rowY.push(yy);
@@ -530,13 +574,18 @@
             x: planeX,
             y: planeY,
             z: planeZ,
-            opacity: 0.4,
+            opacity: 0.45,
+            colorscale: "RdBu",
             showscale: false,
             name: "Best-fit plane"
           };
+        } else {
+          planeInfoEl.textContent = "Best-fit plane unavailable (degenerate geometry).";
         }
+      } else {
+        planeInfoEl.textContent = "";
       }
-  
+
       const deepest = Math.max(...zs, maxPlaneDepth || 0);
       const layout = {
         title: "3D Earthquake Depth",
@@ -556,14 +605,14 @@
       if (surfaceTrace) traces.push(surfaceTrace);
       if (planeTrace)   traces.push(planeTrace);
       traces.push(quakesTrace);
-  
+
       await Plotly.newPlot("plot", traces, layout, { responsive: true });
     }
 
     async function refresh() {
       try {
         const feats = await fetchQuakes();
-        lastFeatures = feats; // NEW: keep for plane toggling
+        lastFeatures = feats;
         setCounts(feats.length);
         renderOnMap(feats);
         renderPlot(feats);
@@ -609,10 +658,13 @@
       refresh();
     });
 
-    // NEW: plane toggle button behavior
+    // plane toggle
     planeBtn.addEventListener("click", () => {
       planeEnabled = !planeEnabled;
       planeBtn.textContent = planeEnabled ? "Hide 3D plane" : "Compute 3D plane";
+      if (!planeEnabled) {
+        planeInfoEl.textContent = "";
+      }
       if (lastFeatures && lastFeatures.length) {
         renderPlot(lastFeatures);
       }
@@ -623,3 +675,4 @@
   </script>
 </body>
 </html>
+
