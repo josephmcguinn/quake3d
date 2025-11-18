@@ -600,28 +600,28 @@
         },
         margin: { l: 0, r: 0, t: 35, b: 0 }
       };
-        /* =========================
-       NORTH ARROW
-       ========================= */
-    const arrowLength = (maxLat - minLat) * 0.25;  // 25% of north-south span
-    
-    const northArrow = {
-      type: "scatter3d",
-      mode: "lines+text",
-      x: [minLon, minLon],                // base → tip longitudes
-      y: [minLat, minLat + arrowLength],  // arrow pointing north (increase latitude)
-      z: [0, 0],                          // place on ground surface
-      text: ["", "N"],
-      textposition: "top center",
-      textfont: { size: 20, color: "black" },
-      line: {
-        color: "black",
-        width: 8
-      },
-      name: "North",
-      showlegend: false,
-      hoverinfo: "skip"
-    };
+          /* =========================
+         NORTH ARROW
+         ========================= */
+      const arrowLength = (maxLat - minLat) * 0.25;  // 25% of north-south span
+      
+      const northArrow = {
+        type: "scatter3d",
+        mode: "lines+text",
+        x: [minLon, minLon],                // base → tip longitudes
+        y: [minLat, minLat + arrowLength],  // arrow pointing north (increase latitude)
+        z: [0, 0],                          // place on ground surface
+        text: ["", "N"],
+        textposition: "top center",
+        textfont: { size: 20, color: "black" },
+        line: {
+          color: "black",
+          width: 8
+        },
+        name: "North",
+        showlegend: false,
+        hoverinfo: "skip"
+      };
     
     /* =========================
        STACK TRACES
