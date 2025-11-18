@@ -600,9 +600,10 @@
         },
         margin: { l: 0, r: 0, t: 35, b: 0 }
       };
-      /* =========================
-         NORTH ARROW (Option B)
-         ========================= */
+      
+    /* =========================
+       NORTH ARROW (Option B)
+       ========================= */
       const arrowLength = (maxLat - minLat) * 0.25;  // 25% of north-south span
       
       const northArrow = {
@@ -636,8 +637,7 @@
          DRAW 3D PLOT
          ========================= */
       await Plotly.newPlot("plot", traces, layout, { responsive: true });
-
-
+  
     async function refresh() {
       try {
         const feats = await fetchQuakes();
