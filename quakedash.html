@@ -51,7 +51,6 @@
       padding:6px 10px; border-top:1px solid #eee; background:#fafafa; font-size:12px; color:#444;
     }
 
-    /* bottom bar button */
     .bar button {
       padding: 4px 8px;
       border: 1px solid #ccc;
@@ -137,7 +136,7 @@
     const MAG_FIELD   = "mag";
 
     // DEM helpers (MapTiler Terrain-RGB)
-    const MAPTILER_KEY = "BasemapAT.terrain"; // <-- your key
+    const MAPTILER_KEY = "BasemapAT.terrain"; // <-- replace with your key if needed
     const TERRAIN_ZOOM = 9;
 
     const tile2lon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
@@ -407,7 +406,6 @@
       const dipRad = Math.atan2(Math.sqrt(nx*nx + ny*ny), Math.abs(nz));
       const dipDeg = dipRad * 180 / Math.PI;
 
-      // strike: rotate horizontal projection 90° clockwise
       let strikeRad = Math.atan2(nx, ny);
       let strikeDeg = strikeRad * 180 / Math.PI;
       strikeDeg = (strikeDeg + 360) % 360;
@@ -536,7 +534,6 @@
         if (coeffs) {
           const { a, b, c } = coeffs;
 
-          // orientation + RMS
           const { nx, ny, nz } = planeNormal(a, b);
           const { strike, dip } = normalToStrikeDip(nx, ny, nz);
           const rms = rmsMisfit(xs, ys, zs, a, b, c);
@@ -600,18 +597,18 @@
         },
         margin: { l: 0, r: 0, t: 35, b: 0 }
       };
-      
-    /* =========================
-       NORTH ARROW (Option B)
-       ========================= */
-      const arrowLength = (maxLat - minLat) * 0.25;  // 25% of north-south span
-      
+
+      /* =========================
+         NORTH ARROW (3D)
+         ========================= */
+      const arrowLength = (maxLat - minLat) * 0.25;  // 25% of N-S span
+
       const northArrow = {
         type: "scatter3d",
         mode: "lines+text",
-        x: [minLon, minLon],                // base → tip longitudes
-        y: [minLat, minLat + arrowLength],  // arrow pointing north (increase latitude)
-        z: [0, 0],                          // place on ground surface
+        x: [minLon, minLon],                // base → tip longitude
+        y: [minLat, minLat + arrowLength],  // arrow points north (increasing latitude)
+        z: [0, 0],                          // place at ground level
         text: ["", "N"],
         textposition: "top center",
         textfont: { size: 20, color: "black" },
@@ -623,21 +620,19 @@
         showlegend: false,
         hoverinfo: "skip"
       };
-      
+
       /* =========================
-         STACK TRACES
+         STACK TRACES & DRAW
          ========================= */
       const traces = [];
-      if (surfaceTrace) traces.push(surfaceTrace);  // terrain
-      if (planeTrace)   traces.push(planeTrace);    // best-fit plane
-      traces.push(quakesTrace);                     // EQ point cloud
-      traces.push(northArrow);                      // <--- Add north arrow last
-      
-      /* =========================
-         DRAW 3D PLOT
-         ========================= */
+      if (surfaceTrace) traces.push(surfaceTrace);
+      if (planeTrace)   traces.push(planeTrace);
+      traces.push(quakesTrace);
+      traces.push(northArrow);
+
       await Plotly.newPlot("plot", traces, layout, { responsive: true });
-  
+    }
+
     async function refresh() {
       try {
         const feats = await fetchQuakes();
@@ -704,4 +699,3 @@
   </script>
 </body>
 </html>
-
