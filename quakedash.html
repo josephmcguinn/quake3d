@@ -136,7 +136,7 @@
     const MAG_FIELD   = "mag";
 
     // DEM helpers (MapTiler Terrain-RGB)
-    const MAPTILER_KEY = "BasemapAT.terrain"; // <-- replace with your key if needed
+    const MAPTILER_KEY = "BasemapAT.terrain"; // or your real key
     const TERRAIN_ZOOM = 9;
 
     const tile2lon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
@@ -334,7 +334,8 @@
     function setCounts(n)     { countsEl.textContent = `${n.toLocaleString()} features`; }
     function setSelMessage(on){ selMsgEl.textContent = on ? "Spatial filter: polygon/rectangle" : "No spatial filter"; }
 
-    // solve 3x3 linear system
+    // 3x3 solver, plane fit, normal, strike/dip, RMS as before...
+
     function solve3x3(m, b) {
       const a11 = m[0][0], a12 = m[0][1], a13 = m[0][2];
       const a21 = m[1][0], a22 = m[1][1], a23 = m[1][2];
@@ -364,7 +365,6 @@
       return [x, y, z];
     }
 
-    // least-squares plane z = a x + b y + c
     function fitPlane(xs, ys, zs) {
       const n = xs.length;
       if (n < 3) return null;
@@ -394,14 +394,12 @@
       return { a, b, c };
     }
 
-    // normal vector from plane z = a x + b y + c
     function planeNormal(a, b) {
       const nx = a, ny = b, nz = -1;
       const L = Math.sqrt(nx*nx + ny*ny + nz*nz);
       return { nx: nx/L, ny: ny/L, nz: nz/L };
     }
 
-    // normal -> strike/dip (degrees)
     function normalToStrikeDip(nx, ny, nz) {
       const dipRad = Math.atan2(Math.sqrt(nx*nx + ny*ny), Math.abs(nz));
       const dipDeg = dipRad * 180 / Math.PI;
@@ -413,7 +411,6 @@
       return { strike: strikeDeg, dip: dipDeg };
     }
 
-    // RMS misfit to plane
     function rmsMisfit(xs, ys, zs, a, b, c) {
       const n = xs.length;
       let sumSq = 0;
@@ -598,32 +595,30 @@
         margin: { l: 0, r: 0, t: 35, b: 0 }
       };
 
-      /* =========================
-         NORTH ARROW (3D)
-         ========================= */
-      const arrowLength = (maxLat - minLat) * 0.25;  // 25% of N-S span
+      /* ===== NORTH ARROW (3D) ===== */
+      const spanLat = (maxLat - minLat) || 1;
+      const spanLon = (maxLon - minLon) || 1;
+
+      const arrowLength = spanLat * 0.25;  // 25% of N–S span
+      const arrowLon = minLon + spanLon * 0.1;   // a bit in from left
+      const arrowLatBase = minLat + spanLat * 0.1; // a bit up from bottom
 
       const northArrow = {
         type: "scatter3d",
         mode: "lines+text",
-        x: [minLon, minLon],                // base → tip longitude
-        y: [minLat, minLat + arrowLength],  // arrow points north (increasing latitude)
-        z: [0, 0],                          // place at ground level
+        x: [arrowLon, arrowLon],
+        y: [arrowLatBase, arrowLatBase + arrowLength], // points north (increasing lat)
+        z: [0, 0],
         text: ["", "N"],
         textposition: "top center",
-        textfont: { size: 20, color: "black" },
-        line: {
-          color: "black",
-          width: 8
-        },
+        textfont: { size: 18, color: "black" },
+        line: { color: "black", width: 8 },
         name: "North",
         showlegend: false,
         hoverinfo: "skip"
       };
 
-      /* =========================
-         STACK TRACES & DRAW
-         ========================= */
+      /* stack traces & draw */
       const traces = [];
       if (surfaceTrace) traces.push(surfaceTrace);
       if (planeTrace)   traces.push(planeTrace);
