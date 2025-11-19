@@ -136,7 +136,7 @@
     const MAG_FIELD   = "mag";
 
     // DEM helpers (MapTiler Terrain-RGB)
-    const MAPTILER_KEY = "BasemapAT.terrain"; // or your real key
+    const MAPTILER_KEY = "AXa0K1Cbk8Q0T6sBjQ5A"; // or your real key
     const TERRAIN_ZOOM = 9;
 
     const tile2lon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
@@ -151,7 +151,7 @@
 
     async function fetchTerrainTile(z, x, y) {
       const url =
-        `https://api.maptiler.com/tiles/terrain-rgb-v2/${z}/${x}/${y}.png?key=${MAPTILER_KEY}`;
+        `https://api.maptiler.com/tiles/terrain-quantized-mesh-v2/${z}/${x}/${y}.png?key=${MAPTILER_KEY}`;
       const img = new Image();
       img.crossOrigin = "anonymous";
       img.decoding = "async";
