@@ -90,6 +90,14 @@
         <button id="reloadBtn" title="Reload full dataset">Reload</button>
       </div>
 
+      <!-- Terrain toggle -->
+      <div class="row">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <input type="checkbox" id="terrainToggle">
+          Show terrain surface (slower)
+        </label>
+      </div>
+
       <div class="small">
         On the map, use the draw tools (polygon or rectangle) to spatially filter.
       </div>
@@ -136,7 +144,7 @@
     const MAG_FIELD   = "mag";
 
     // DEM helpers (MapTiler Terrain-RGB)
-    const MAPTILER_KEY = "AXa0K1Cbk8Q0T6sBjQ5A"; // or your real key
+    const MAPTILER_KEY = "YOUR_MAPTILER_KEY_HERE"; // replace with your real key
     const TERRAIN_ZOOM = 9;
 
     const tile2lon = (x, z) => (x / Math.pow(2, z)) * 360 - 180;
@@ -280,19 +288,21 @@
 
     const quakesLayer = L.layerGroup().addTo(map);
 
-    const statusEl   = document.getElementById("status");
-    const countsEl   = document.getElementById("counts");
-    const selMsgEl   = document.getElementById("selMsg");
-    const minMagEl   = document.getElementById("minMag");
-    const planeBtn   = document.getElementById("planeBtn");
+    const statusEl    = document.getElementById("status");
+    const countsEl    = document.getElementById("counts");
+    const selMsgEl    = document.getElementById("selMsg");
+    const minMagEl    = document.getElementById("minMag");
+    const planeBtn    = document.getElementById("planeBtn");
     const planeInfoEl = document.getElementById("planeInfo");
+    const terrainToggle = document.getElementById("terrainToggle");
 
     let currentGeometry = null;
     let currentWhere     = null;
 
-    // plane toggle and last fetched features
-    let planeEnabled = false;
-    let lastFeatures = [];
+    // plane toggle, terrain toggle, and last fetched features
+    let planeEnabled   = false;
+    let terrainEnabled = false;  // OFF by default for speed
+    let lastFeatures   = [];
 
     /* =========================
        HELPERS
@@ -333,8 +343,6 @@
     function setStatus(msg)   { statusEl.textContent = msg; }
     function setCounts(n)     { countsEl.textContent = `${n.toLocaleString()} features`; }
     function setSelMessage(on){ selMsgEl.textContent = on ? "Spatial filter: polygon/rectangle" : "No spatial filter"; }
-
-    // 3x3 solver, plane fit, normal, strike/dip, RMS as before...
 
     function solve3x3(m, b) {
       const a11 = m[0][0], a12 = m[0][1], a13 = m[0][2];
@@ -493,19 +501,23 @@
       };
 
       let surfaceTrace = null;
-      try {
-        const dem = await buildDEMForBBox(bbox);
-        surfaceTrace = {
-          type: "surface",
-          x: dem.X, y: dem.Y, z: dem.Zkm,
-          opacity: 0.9,
-          colorscale: "Earth",
-          showscale: false,
-          name: "Terrain",
-          contours: { z: { show: false } }
-        };
-      } catch (e) {
-        console.warn("Terrain surface failed, continuing without it:", e);
+
+      // Only build DEM if terrain is enabled
+      if (terrainEnabled) {
+        try {
+          const dem = await buildDEMForBBox(bbox);
+          surfaceTrace = {
+            type: "surface",
+            x: dem.X, y: dem.Y, z: dem.Zkm,
+            opacity: 0.9,
+            colorscale: "Earth",
+            showscale: false,
+            name: "Terrain",
+            contours: { z: { show: false } }
+          };
+        } catch (e) {
+          console.warn("Terrain surface failed, continuing without it:", e);
+        }
       }
 
       const quakesTrace = {
@@ -599,15 +611,15 @@
       const spanLat = (maxLat - minLat) || 1;
       const spanLon = (maxLon - minLon) || 1;
 
-      const arrowLength = spanLat * 0.25;  // 25% of N–S span
-      const arrowLon = minLon + spanLon * 0.1;   // a bit in from left
-      const arrowLatBase = minLat + spanLat * 0.1; // a bit up from bottom
+      const arrowLength = spanLat * 0.25;
+      const arrowLon = minLon + spanLon * 0.1;
+      const arrowLatBase = minLat + spanLat * 0.1;
 
       const northArrow = {
         type: "scatter3d",
         mode: "lines+text",
         x: [arrowLon, arrowLon],
-        y: [arrowLatBase, arrowLatBase + arrowLength], // points north (increasing lat)
+        y: [arrowLatBase, arrowLatBase + arrowLength],
         z: [0, 0],
         text: ["", "N"],
         textposition: "top center",
@@ -618,7 +630,6 @@
         hoverinfo: "skip"
       };
 
-      /* stack traces & draw */
       const traces = [];
       if (surfaceTrace) traces.push(surfaceTrace);
       if (planeTrace)   traces.push(planeTrace);
@@ -684,6 +695,14 @@
       if (!planeEnabled) {
         planeInfoEl.textContent = "";
       }
+      if (lastFeatures && lastFeatures.length) {
+        renderPlot(lastFeatures);
+      }
+    });
+
+    // terrain toggle
+    terrainToggle.addEventListener("change", () => {
+      terrainEnabled = terrainToggle.checked;
       if (lastFeatures && lastFeatures.length) {
         renderPlot(lastFeatures);
       }
